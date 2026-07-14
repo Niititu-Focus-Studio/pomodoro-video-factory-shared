@@ -1,7 +1,7 @@
 const { spawn } = require("child_process");
 const path = require("path");
-const fs = require("fs");
 const { escapeFfmpegFilterPath } = require("./ffmpegUtils");
+const { getWindowsFontconfigEnv } = require("./fontconfig");
 
 function parseProgressLine(line) {
   const [key, value] = line.split("=");
@@ -26,11 +26,28 @@ function withProgressArgs(command, args, onProgress) {
   ];
 }
 
+function buildSpawnOptions(command, options = {}) {
+  if (command !== "ffmpeg") return undefined;
+  const fontconfigEnv = getWindowsFontconfigEnv({
+    env: options.env || process.env,
+    fontsConfigPath: options.fontsConfigPath,
+    platform: options.platform || process.platform,
+  });
+  if (Object.keys(fontconfigEnv).length === 0) return undefined;
+  return {
+    env: {
+      ...(options.env || process.env),
+      ...fontconfigEnv,
+    },
+  };
+}
+
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(
       command,
       withProgressArgs(command, args, options.onProgress),
+      buildSpawnOptions(command, options),
     );
     let stdout = "";
     let stderr = "";
@@ -86,7 +103,13 @@ async function probeMedia(filePath) {
 }
 
 async function normalizeVideo(inputPath, outputPath, options = {}) {
-  const args = [
+  const args = buildNormalizeVideoArgs(inputPath, outputPath);
+  await runCommand("ffmpeg", args, options);
+  return outputPath;
+}
+
+function buildNormalizeVideoArgs(inputPath, outputPath) {
+  return [
     "-y",
     "-i",
     inputPath,
@@ -103,8 +126,6 @@ async function normalizeVideo(inputPath, outputPath, options = {}) {
     "23",
     outputPath,
   ];
-  await runCommand("ffmpeg", args, options);
-  return outputPath;
 }
 
 async function createSegment(
@@ -117,6 +138,26 @@ async function createSegment(
   fontItalicPath = null,
   options = {},
 ) {
+  const args = buildCreateSegmentArgs({
+    inputPath,
+    outputPath,
+    durationSeconds,
+    label,
+    timerTextColor,
+    fontItalicPath,
+  });
+  await runCommand("ffmpeg", args, options);
+  return outputPath;
+}
+
+function buildCreateSegmentArgs({
+  inputPath,
+  outputPath,
+  durationSeconds,
+  label,
+  timerTextColor = "0x7D6556",
+  fontItalicPath = null,
+}) {
   const formatColorForFFmpeg = (color) => {
     if (!color) return "0x7D6556";
     const rgbaMatch = color.match(
@@ -141,8 +182,6 @@ async function createSegment(
   };
 
   const safeColor = formatColorForFFmpeg(timerTextColor);
-
-  // Build drawtext filters
   const timerExpr = `%{eif\\:trunc((${durationSeconds}-t)/60)\\:d\\:2}\\:%{eif\\:mod(${durationSeconds}-t\\,60)\\:d\\:2}`;
 
   if (!fontItalicPath) {
@@ -154,7 +193,7 @@ async function createSegment(
 
   const drawtextFilter = `drawtext=text='${label}':fontfile='${escapeFfmpegFilterPath(fontItalicPath)}':x=(w/2-tw)/2:y=(h-th)/2-120:fontsize=56:fontcolor=${safeColor},drawtext=text='${timerExpr}':x=(w/2-tw)/2:y=(h-th)/2+40:fontsize=180:fontcolor=${safeColor}`;
 
-  const args = [
+  return [
     "-y",
     "-stream_loop",
     "-1",
@@ -172,8 +211,6 @@ async function createSegment(
     "23",
     outputPath,
   ];
-  await runCommand("ffmpeg", args, options);
-  return outputPath;
 }
 
 async function concatSegments(segmentsListFile, outputPath, options = {}) {
@@ -370,4 +407,9 @@ module.exports = {
   attachAudio,
   attachAudioToSegment,
   reformatVideo,
+  _internals: {
+    buildCreateSegmentArgs,
+    buildNormalizeVideoArgs,
+    buildSpawnOptions,
+  },
 };
