@@ -1,26 +1,37 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const { escapeFfmpegFilterPath } = require("./ffmpegUtils");
 
 function parseProgressLine(line) {
-  const [key, value] = line.split('=');
-  if (key === 'out_time_ms') return Number(value) / 1000000;
-  if (key === 'out_time') {
+  const [key, value] = line.split("=");
+  if (key === "out_time_ms") return Number(value) / 1000000;
+  if (key === "out_time") {
     const match = /^(\d+):(\d+):(\d+(?:\.\d+)?)$/.exec(value);
-    if (match) return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+    if (match)
+      return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
   }
   return null;
 }
 
 function withProgressArgs(command, args, onProgress) {
-  if (command !== 'ffmpeg' || !onProgress) return args;
-  const insertAt = args[0] === '-y' ? 1 : 0;
-  return [...args.slice(0, insertAt), '-progress', 'pipe:1', '-nostats', ...args.slice(insertAt)];
+  if (command !== "ffmpeg" || !onProgress) return args;
+  const insertAt = args[0] === "-y" ? 1 : 0;
+  return [
+    ...args.slice(0, insertAt),
+    "-progress",
+    "pipe:1",
+    "-nostats",
+    ...args.slice(insertAt),
+  ];
 }
 
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, withProgressArgs(command, args, options.onProgress));
+    const proc = spawn(
+      command,
+      withProgressArgs(command, args, options.onProgress),
+    );
     let stdout = "";
     let stderr = "";
     let progressBuffer = "";
@@ -34,7 +45,8 @@ function runCommand(command, args, options = {}) {
       progressBuffer = lines.pop() || "";
       for (const line of lines) {
         const currentTimeSeconds = parseProgressLine(line);
-        if (currentTimeSeconds !== null && Number.isFinite(currentTimeSeconds)) options.onProgress({ currentTimeSeconds });
+        if (currentTimeSeconds !== null && Number.isFinite(currentTimeSeconds))
+          options.onProgress({ currentTimeSeconds });
       }
     });
     proc.stderr.on("data", (data) => {
@@ -134,10 +146,13 @@ async function createSegment(
   const timerExpr = `%{eif\\:trunc((${durationSeconds}-t)/60)\\:d\\:2}\\:%{eif\\:mod(${durationSeconds}-t\\,60)\\:d\\:2}`;
 
   if (!fontItalicPath) {
-    fontItalicPath = path.join(__dirname, "../be/src/assets/fonts/CormorantGaramond-Italic.ttf");
+    fontItalicPath = path.join(
+      __dirname,
+      "../be/src/assets/fonts/CormorantGaramond-Italic.ttf",
+    );
   }
 
-  const drawtextFilter = `drawtext=text='${label}':fontfile='${fontItalicPath.replace(/\\/g, '/')}':x=(w/2-tw)/2:y=(h-th)/2-120:fontsize=56:fontcolor=${safeColor},drawtext=text='${timerExpr}':x=(w/2-tw)/2:y=(h-th)/2+40:fontsize=180:fontcolor=${safeColor}`;
+  const drawtextFilter = `drawtext=text='${label}':fontfile='${escapeFfmpegFilterPath(fontItalicPath)}':x=(w/2-tw)/2:y=(h-th)/2-120:fontsize=56:fontcolor=${safeColor},drawtext=text='${timerExpr}':x=(w/2-tw)/2:y=(h-th)/2+40:fontsize=180:fontcolor=${safeColor}`;
 
   const args = [
     "-y",
@@ -178,7 +193,13 @@ async function concatSegments(segmentsListFile, outputPath, options = {}) {
   return outputPath;
 }
 
-async function attachAudio(videoPath, audioPath, outputPath, durationSeconds, options = {}) {
+async function attachAudio(
+  videoPath,
+  audioPath,
+  outputPath,
+  durationSeconds,
+  options = {},
+) {
   const args = [
     "-y",
     "-i",
@@ -287,20 +308,22 @@ async function reformatVideo(
     drawboxes.push(`drawbox=x=0:y=0:w=1920:h=${topBar}:color=black:t=fill`);
   }
   if (bottomBar > 0) {
-    drawboxes.push(`drawbox=x=0:y=1080-${bottomBar}:w=1920:h=${bottomBar}:color=black:t=fill`);
+    drawboxes.push(
+      `drawbox=x=0:y=1080-${bottomBar}:w=1920:h=${bottomBar}:color=black:t=fill`,
+    );
   }
 
   const filterComplexArr = [
     `[0:v]scale=${ws}:${hs}:force_original_aspect_ratio=disable[vscaled]`,
     `color=c=black:s=1920x1080[bg]`,
-    `[bg][vscaled]overlay=x=${px}:y=${py}:shortest=1${drawboxes.length > 0 ? '[vover]' : '[vout]'}`,
+    `[bg][vscaled]overlay=x=${px}:y=${py}:shortest=1${drawboxes.length > 0 ? "[vover]" : "[vout]"}`,
   ];
 
   if (drawboxes.length > 0) {
-    filterComplexArr.push(`[vover]${drawboxes.join(',')}[vout]`);
+    filterComplexArr.push(`[vover]${drawboxes.join(",")}[vout]`);
   }
-  
-  const filterComplex = filterComplexArr.join(';');
+
+  const filterComplex = filterComplexArr.join(";");
 
   const args = [
     "-y",
